@@ -15,9 +15,9 @@ class PointWiseFeedForward(torch.nn.Module):
 
     def forward(self, inputs):
         outputs = self.dropout2(self.conv2(self.relu(self.dropout1(self.conv1(inputs.transpose(-1, -2))))))
-        outputs = outputs.transpose(-1, -2) # as Conv1D requires (N, C, Length)
+        outputs = outputs.transpose(-1, -2) # as Conv1D requires (N, C, Length), C = embed_dim, Length = maxlen
         outputs += inputs
-        return outputs
+        return outputs # (N, Seq_len, embedding_dim)
 
 # pls use the following self-made multihead attention layer
 # in case your pytorch version is below 1.16 or for other reasons
@@ -63,6 +63,7 @@ class SASRec(torch.nn.Module):
             # self.neg_sigmoid = torch.nn.Sigmoid()
 
     def log2feats(self, log_seqs):
+        # log_seq: (B, L)
         seqs = self.item_emb(torch.LongTensor(log_seqs).to(self.dev))
         seqs *= self.item_emb.embedding_dim ** 0.5
         positions = np.tile(np.array(range(log_seqs.shape[1])), [log_seqs.shape[0], 1])
@@ -76,14 +77,14 @@ class SASRec(torch.nn.Module):
         attention_mask = ~torch.tril(torch.ones((tl, tl), dtype=torch.bool, device=self.dev))
 
         for i in range(len(self.attention_layers)):
-            seqs = torch.transpose(seqs, 0, 1)
+            seqs = torch.transpose(seqs, 0, 1) # (L, B, C)
             Q = self.attention_layernorms[i](seqs)
-            mha_outputs, _ = self.attention_layers[i](Q, seqs, seqs, 
+            mha_outputs, _ = self.attention_layers[i](Q, seqs, seqs,
                                             attn_mask=attention_mask)
                                             # key_padding_mask=timeline_mask
                                             # need_weights=False) this arg do not work?
-            seqs = Q + mha_outputs
-            seqs = torch.transpose(seqs, 0, 1)
+            seqs = Q + mha_outputs # (L, B, C)
+            seqs = torch.transpose(seqs, 0, 1) # (B, L, C)
 
             seqs = self.forward_layernorms[i](seqs)
             seqs = self.forward_layers[i](seqs)
@@ -93,7 +94,7 @@ class SASRec(torch.nn.Module):
 
         return log_feats
 
-    def forward(self, user_ids, log_seqs, pos_seqs, neg_seqs): # for training        
+    def forward(self, user_ids, log_seqs, pos_seqs, neg_seqs): # for training
         log_feats = self.log2feats(log_seqs) # user_ids hasn't been used yet
 
         pos_embs = self.item_emb(torch.LongTensor(pos_seqs).to(self.dev))
@@ -110,7 +111,7 @@ class SASRec(torch.nn.Module):
     def predict(self, user_ids, log_seqs, item_indices): # for inference
         log_feats = self.log2feats(log_seqs) # user_ids hasn't been used yet
 
-        final_feat = log_feats[:, -1, :] # only use last QKV classifier, a waste
+        final_feat = log_feats[:, -1, :] # only use last QKV classifier, a waste, (U, C)
 
         item_embs = self.item_emb(torch.LongTensor(item_indices).to(self.dev)) # (U, I, C)
 

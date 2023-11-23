@@ -6,15 +6,12 @@ import numpy as np
 from collections import defaultdict
 from multiprocessing import Process, Queue
 
-# sampler for batch generation
-def random_neq(l, r, s):
-    t = np.random.randint(l, r)
-    while t in s:
-        t = np.random.randint(l, r)
-    return t
 
+def sample_function(user_train, usernum, itemnum, batch_size, maxlen, maxlen_ih, result_queue, SEED):
+    # construct negative sampling pool
+    # the last element in each user sequence is a (itemid, item_history) tuple
+    negpool = [x[-1] for x in user_train.values()]
 
-def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_queue, SEED):
     def sample():
 
         user = np.random.randint(1, usernum + 1)
@@ -23,19 +20,35 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_que
         seq = np.zeros([maxlen], dtype=np.int32)
         pos = np.zeros([maxlen], dtype=np.int32)
         neg = np.zeros([maxlen], dtype=np.int32)
-        nxt = user_train[user][-1]
+        pos_ih = np.zeros([maxlen, maxlen_ih], dtype=np.int32)
+        neg_ih = np.zeros([maxlen, maxlen_ih], dtype=np.int32)
+        nxt, nxt_ih = user_train[user][-1]
         idx = maxlen - 1
 
-        ts = set(user_train[user])
-        for i in reversed(user_train[user][:-1]):
+        true_set = set([itemid for itemid, _ in user_train[user]])
+        for i, ih in reversed(user_train[user][:-1]):
             seq[idx] = i
             pos[idx] = nxt
-            if nxt != 0: neg[idx] = random_neq(1, itemnum + 1, ts)
+            nxt_ih_len = min(maxlen_ih, len(nxt_ih))
+            nxt_ih = [0] * (maxlen_ih - nxt_ih_len) + nxt_ih[-nxt_ih_len:]
+            pos_ih[idx, :] = nxt_ih
+            if nxt != 0:
+                # negative sampling
+                neg_pool_idx = np.random.randint(0, len(negpool))
+                neg_spl_i, neg_spl_ih = negpool[neg_pool_idx]
+                while neg_spl_i in true_set:
+                    neg_spl_idx = np.random.randint(0, len(negpool))
+                    neg_spl_i, neg_spl_ih = negpool[neg_spl_idx]
+                # end of negative sampling
+                neg_spl_ih_len = min(maxlen_ih, len(neg_spl_ih))
+                neg_spl_ih = [0] * (maxlen_ih - neg_spl_ih_len) + neg_spl_ih[-neg_spl_ih_len:]
+                neg[idx], neg_ih[idx, :] = neg_spl_i, neg_spl_ih
             nxt = i
+            nxt_ih = ih
             idx -= 1
             if idx == -1: break
 
-        return (user, seq, pos, neg)
+        return (user, seq, pos, neg, pos_ih, neg_ih)
 
     np.random.seed(SEED)
     while True:
@@ -47,7 +60,7 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_que
 
 
 class WarpSampler(object):
-    def __init__(self, User, usernum, itemnum, batch_size=64, maxlen=10, n_workers=1):
+    def __init__(self, User, usernum, itemnum, batch_size=64, maxlen=10, maxlen_ih=10, n_workers=1):
         self.result_queue = Queue(maxsize=n_workers * 10)
         self.processors = []
         for i in range(n_workers):
@@ -57,6 +70,7 @@ class WarpSampler(object):
                                                       itemnum,
                                                       batch_size,
                                                       maxlen,
+                                                      maxlen_ih,
                                                       self.result_queue,
                                                       np.random.randint(2e9)
                                                       )))
@@ -72,7 +86,6 @@ class WarpSampler(object):
             p.join()
 
 
-# train/val/test data generation
 def data_partition(fname):
     usernum = 0
     itemnum = 0
@@ -81,14 +94,15 @@ def data_partition(fname):
     user_valid = {}
     user_test = {}
     # assume user/item index starting from 1
-    f = open('data/%s.txt' % fname, 'r')
+    f = open('ml-1m/%s.txt' % fname, 'r')
     for line in f:
-        u, i = line.rstrip().split(' ')
+        u, i, _, ih = line.strip('\n').split(' ')
         u = int(u)
         i = int(i)
+        ih = [int(x) for x in ih.split(',')] if len(ih) > 0 else []
         usernum = max(u, usernum)
         itemnum = max(i, itemnum)
-        User[u].append(i)
+        User[u].append((i, ih))
 
     for user in User:
         nfeedback = len(User[user])
@@ -113,6 +127,9 @@ def evaluate(model, dataset, args):
     HT = 0.0
     valid_user = 0.0
 
+    # a list of tuple [([itemid], item_history)]
+    neg_pool = [x for x in test.values() if len(x) > 0]
+
     if usernum>10000:
         users = random.sample(range(1, usernum + 1), 10000)
     else:
@@ -121,21 +138,23 @@ def evaluate(model, dataset, args):
 
         if len(train[u]) < 1 or len(test[u]) < 1: continue
 
+        # join the train seq and the validation element together
         seq = np.zeros([args.maxlen], dtype=np.int32)
         idx = args.maxlen - 1
-        seq[idx] = valid[u][0]
+        seq[idx], _ = valid[u][0]
         idx -= 1
-        for i in reversed(train[u]):
+        for i, ih in reversed(train[u]):
             seq[idx] = i
             idx -= 1
             if idx == -1: break
-        rated = set(train[u])
+        rated = set([i for i, _ in train[u]])
         rated.add(0)
-        item_idx = [test[u][0]]
+        item_idx, item_history = [test[u][0][0]], [test[u][0][1]]
         for _ in range(100):
-            t = np.random.randint(1, itemnum + 1)
-            while t in rated: t = np.random.randint(1, itemnum + 1)
-            item_idx.append(t)
+            t = np.random.randint(0, len(neg_pool))
+            while neg_pool[t][0][0] in rated: t = np.random.randint(0, len(neg_pool))
+            item_idx.append(neg_pool[t][0][0])
+            item_history.append(neg_pool[t][0][1])
 
         predictions = -model.predict(*[np.array(l) for l in [[u], [seq], item_idx]])
         predictions = predictions[0] # - for 1st argsort DESC
@@ -158,6 +177,8 @@ def evaluate(model, dataset, args):
 def evaluate_valid(model, dataset, args):
     [train, valid, test, usernum, itemnum] = copy.deepcopy(dataset)
 
+    neg_pool = [x for x in test.values() if len(x) > 0]
+
     NDCG = 0.0
     valid_user = 0.0
     HT = 0.0
@@ -170,18 +191,19 @@ def evaluate_valid(model, dataset, args):
 
         seq = np.zeros([args.maxlen], dtype=np.int32)
         idx = args.maxlen - 1
-        for i in reversed(train[u]):
+        for i, _ in reversed(train[u]):
             seq[idx] = i
             idx -= 1
             if idx == -1: break
 
-        rated = set(train[u])
+        rated = set([i for i, _ in train[u]])
         rated.add(0)
-        item_idx = [valid[u][0]]
+        item_idx, item_history = [valid[u][0][0]], [valid[u][0][1]]
         for _ in range(100):
-            t = np.random.randint(1, itemnum + 1)
-            while t in rated: t = np.random.randint(1, itemnum + 1)
-            item_idx.append(t)
+            t = np.random.randint(0, len(neg_pool))
+            while neg_pool[t][0][0] in rated: t = np.random.randint(0, len(neg_pool))
+            item_idx.append(neg_pool[t][0][0])
+            item_history.append(neg_pool[t][0][1])
 
         predictions = -model.predict(*[np.array(l) for l in [[u], [seq], item_idx]])
         predictions = predictions[0]

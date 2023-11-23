@@ -4,7 +4,9 @@ import torch
 import argparse
 
 from model import SASRec
-from utils import *
+from utils_ihm import *
+
+# python main_ihm.py --dataset=ml-1m --train_dir=default --maxlen=20 --dropout_rate=0.2 --num_epochs 20
 
 def str2bool(s):
     if s not in {'false', 'true'}:
@@ -45,7 +47,7 @@ if __name__ == '__main__':
         cc += len(user_train[u])
     print('average sequence length: %.2f' % (cc / len(user_train)))
 
-    f = open(os.path.join(args.dataset + '_' + args.train_dir, 'log.txt'), 'w')
+    f = open(os.path.join('experiments/' + args.dataset + '_' + args.train_dir, 'log.txt'), 'w')
 
     sampler = WarpSampler(user_train, usernum, itemnum, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=3)
     model = SASRec(usernum, itemnum, args).to(args.device) # no ReLU activation in original SASRec implementation?
@@ -90,8 +92,8 @@ if __name__ == '__main__':
     for epoch in range(epoch_start_idx, args.num_epochs + 1):
         if args.inference_only: break # just to decrease identition
         for step in range(num_batch): # tqdm(range(num_batch), total=num_batch, ncols=70, leave=False, unit='b'):
-            u, seq, pos, neg = sampler.next_batch() # tuples to ndarray
-            u, seq, pos, neg = np.array(u), np.array(seq), np.array(pos), np.array(neg)
+            u, seq, pos, neg, pos_ih, neg_ih = sampler.next_batch() # tuples to ndarray
+            u, seq, pos, neg, pos_ih, neg_ih = np.array(u), np.array(seq), np.array(pos), np.array(neg), np.array(pos_ih), np.array(neg_ih)
             pos_logits, neg_logits = model(u, seq, pos, neg)
             pos_labels, neg_labels = torch.ones(pos_logits.shape, device=args.device), torch.zeros(neg_logits.shape, device=args.device)
             # print("\neye ball check raw_logits:"); print(pos_logits); print(neg_logits) # check pos_logits > 0, neg_logits < 0
@@ -104,7 +106,7 @@ if __name__ == '__main__':
             adam_optimizer.step()
             print("loss in epoch {} iteration {}: {}".format(epoch, step, loss.item())) # expected 0.4~0.6 after init few epochs
 
-        if epoch % 20 == 0:
+        if epoch % 1 == 0:
             model.eval()
             t1 = time.time() - t0
             T += t1
