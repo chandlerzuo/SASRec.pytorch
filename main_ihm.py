@@ -3,7 +3,7 @@ import time
 import torch
 import argparse
 
-from model import SASRec
+from model_ihm import SASRecIHM as SASRec
 from utils_ihm import *
 
 # python main_ihm.py --dataset=ml-1m --train_dir=default --maxlen=20 --dropout_rate=0.2 --num_epochs 20
@@ -19,6 +19,7 @@ parser.add_argument('--train_dir', required=True)
 parser.add_argument('--batch_size', default=128, type=int)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--maxlen', default=50, type=int)
+parser.add_argument('--maxlen_ih', default=20, type=int)
 parser.add_argument('--hidden_units', default=50, type=int)
 parser.add_argument('--num_blocks', default=2, type=int)
 parser.add_argument('--num_epochs', default=201, type=int)
@@ -42,6 +43,7 @@ if __name__ == '__main__':
 
     [user_train, user_valid, user_test, usernum, itemnum] = dataset
     num_batch = len(user_train) // args.batch_size # tail? + ((len(user_train) % args.batch_size) != 0)
+    num_batch = 1
     cc = 0.0
     for u in user_train:
         cc += len(user_train[u])
@@ -49,7 +51,7 @@ if __name__ == '__main__':
 
     f = open(os.path.join('experiments/' + args.dataset + '_' + args.train_dir, 'log.txt'), 'w')
 
-    sampler = WarpSampler(user_train, usernum, itemnum, batch_size=args.batch_size, maxlen=args.maxlen, n_workers=3)
+    sampler = WarpSampler(user_train, usernum, itemnum, batch_size=args.batch_size, maxlen=args.maxlen, maxlen_ih=args.maxlen_ih, n_workers=3)
     model = SASRec(usernum, itemnum, args).to(args.device) # no ReLU activation in original SASRec implementation?
 
     for name, param in model.named_parameters():
@@ -94,7 +96,7 @@ if __name__ == '__main__':
         for step in range(num_batch): # tqdm(range(num_batch), total=num_batch, ncols=70, leave=False, unit='b'):
             u, seq, pos, neg, pos_ih, neg_ih = sampler.next_batch() # tuples to ndarray
             u, seq, pos, neg, pos_ih, neg_ih = np.array(u), np.array(seq), np.array(pos), np.array(neg), np.array(pos_ih), np.array(neg_ih)
-            pos_logits, neg_logits = model(u, seq, pos, neg)
+            pos_logits, neg_logits = model(u, seq, pos, neg, pos_ih, neg_ih)
             pos_labels, neg_labels = torch.ones(pos_logits.shape, device=args.device), torch.zeros(neg_logits.shape, device=args.device)
             # print("\neye ball check raw_logits:"); print(pos_logits); print(neg_logits) # check pos_logits > 0, neg_logits < 0
             adam_optimizer.zero_grad()
@@ -106,7 +108,7 @@ if __name__ == '__main__':
             adam_optimizer.step()
             print("loss in epoch {} iteration {}: {}".format(epoch, step, loss.item())) # expected 0.4~0.6 after init few epochs
 
-        if epoch % 1 == 0:
+        if epoch % 20 == 0:
             model.eval()
             t1 = time.time() - t0
             T += t1

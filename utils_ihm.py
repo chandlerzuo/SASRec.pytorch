@@ -11,6 +11,11 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, maxlen_ih,
     # construct negative sampling pool
     # the last element in each user sequence is a (itemid, item_history) tuple
     negpool = [x[-1] for x in user_train.values()]
+    negpool_i_to_ih = {}
+    for i, ih in negpool:
+        if i not in negpool_i_to_ih: negpool_i_to_ih[i] = []
+        negpool_i_to_ih[i].append(ih)
+    print(f"{len(negpool_i_to_ih)} items in the neg pool")
 
     def sample():
 
@@ -33,13 +38,26 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, maxlen_ih,
             nxt_ih = [0] * (maxlen_ih - nxt_ih_len) + nxt_ih[-nxt_ih_len:]
             pos_ih[idx, :] = nxt_ih
             if nxt != 0:
-                # negative sampling
+                """
+                # pool negative sampling
                 neg_pool_idx = np.random.randint(0, len(negpool))
                 neg_spl_i, neg_spl_ih = negpool[neg_pool_idx]
                 while neg_spl_i in true_set:
                     neg_spl_idx = np.random.randint(0, len(negpool))
                     neg_spl_i, neg_spl_ih = negpool[neg_spl_idx]
-                # end of negative sampling
+                # end of pool negative sampling
+                """
+                # uniform negative sampling
+                neg_spl_i = np.random.randint(1, itemnum + 1)
+                while neg_spl_i in true_set:
+                    neg_spl_i = np.random.randint(1, itemnum + 1)
+                # random sample a history sequence for this item
+                if neg_spl_i in negpool_i_to_ih:
+                    neg_spl_ih_idx = np.random.randint(0, len(negpool_i_to_ih[neg_spl_i]))
+                    neg_spl_ih = negpool_i_to_ih[neg_spl_i][neg_spl_ih_idx]
+                else:
+                    neg_spl_ih = []
+                # end of uniform negative sampling
                 neg_spl_ih_len = min(maxlen_ih, len(neg_spl_ih))
                 neg_spl_ih = [0] * (maxlen_ih - neg_spl_ih_len) + neg_spl_ih[-neg_spl_ih_len:]
                 neg[idx], neg_ih[idx, :] = neg_spl_i, neg_spl_ih
@@ -149,14 +167,26 @@ def evaluate(model, dataset, args):
             if idx == -1: break
         rated = set([i for i, _ in train[u]])
         rated.add(0)
-        item_idx, item_history = [test[u][0][0]], [test[u][0][1]]
+        item_idx, pos_ih = [test[u][0][0]], test[u][0][1]
+        ih_len = min(args.maxlen_ih, len(pos_ih))
+        item_history = [[0] * (args.maxlen_ih - ih_len) + pos_ih[-ih_len:]]
         for _ in range(100):
             t = np.random.randint(0, len(neg_pool))
             while neg_pool[t][0][0] in rated: t = np.random.randint(0, len(neg_pool))
             item_idx.append(neg_pool[t][0][0])
-            item_history.append(neg_pool[t][0][1])
+            neg_spl_ih_len = min(args.maxlen_ih, len(neg_pool[t][0][1]))
+            neg_spl_ih = [0] * (args.maxlen_ih - neg_spl_ih_len) + neg_pool[t][0][1][-neg_spl_ih_len:]
+            item_history.append(neg_spl_ih)
+            """
+            # if we use this, hit@10 = ~0.82
+            t = np.random.randint(1, itemnum + 1)
+            while t in rated: t = np.random.randint(1, itemnum + 1)
+            item_idx.append(t)
+            """
 
-        predictions = -model.predict(*[np.array(l) for l in [[u], [seq], item_idx]])
+        predictions = -model.predict(
+            *[np.array(l) for l in [[u], [seq], item_idx, item_history]]
+        )
         predictions = predictions[0] # - for 1st argsort DESC
 
         rank = predictions.argsort().argsort()[0].item()
@@ -198,14 +228,25 @@ def evaluate_valid(model, dataset, args):
 
         rated = set([i for i, _ in train[u]])
         rated.add(0)
-        item_idx, item_history = [valid[u][0][0]], [valid[u][0][1]]
+        item_idx, pos_ih = [valid[u][0][0]], valid[u][0][1]
+        ih_len = min(args.maxlen_ih, len(pos_ih))
+        item_history = [[0] * (args.maxlen_ih - ih_len) + pos_ih[-ih_len:]]
         for _ in range(100):
             t = np.random.randint(0, len(neg_pool))
             while neg_pool[t][0][0] in rated: t = np.random.randint(0, len(neg_pool))
             item_idx.append(neg_pool[t][0][0])
-            item_history.append(neg_pool[t][0][1])
+            neg_spl_ih_len = min(args.maxlen_ih, len(neg_pool[t][0][1]))
+            neg_spl_ih = [0] * (args.maxlen_ih - neg_spl_ih_len) + neg_pool[t][0][1][-neg_spl_ih_len:]
+            item_history.append(neg_spl_ih)
+            """
+            t = np.random.randint(1, itemnum + 1)
+            while t in rated: t = np.random.randint(1, itemnum + 1)
+            item_idx.append(t)
+            """
 
-        predictions = -model.predict(*[np.array(l) for l in [[u], [seq], item_idx]])
+        predictions = -model.predict(
+            *[np.array(l) for l in [[u], [seq], item_idx, item_history]]
+        )
         predictions = predictions[0]
 
         rank = predictions.argsort().argsort()[0].item()
