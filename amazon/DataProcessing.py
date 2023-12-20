@@ -1,20 +1,17 @@
 import gzip
+import json
 from collections import defaultdict
 from datetime import datetime
 
-raw_file = "ratings.dat"
-processed_file = "ml-1m.txt"
 max_ih_len = 30
-processed_file = "ml-1m_full.txt"
 min_degree = 0
-raw_file = "All_Beauty.json.gz"
-processed_file = "amazon_beauty.txt"
+raw_file = "../raw_data/Video_Games.json.gz"
+processed_file = "amazon_games.txt"
 
 def parse(path):
-    g = open(path, 'r')
+    g = gzip.open(path, 'r')
     for l in g:
-        yield l.strip().split('::')
-
+        yield json.loads(l)
 
 countU = defaultdict(lambda: 0)
 countP = defaultdict(lambda: 0)
@@ -22,7 +19,9 @@ line = 0
 
 for l in parse(raw_file):
     line += 1
-    rev, asin, _, _ = l
+    asin = l['asin']
+    rev = l['reviewerID']
+    time = l['unixReviewTime']
     countU[rev] += 1
     countP[asin] += 1
 
@@ -35,7 +34,9 @@ Item = dict()
 Timestamp = dict()
 for l in parse(raw_file):
     line += 1
-    rev, asin, rating, timestamp = l
+    asin = l['asin']
+    rev = l['reviewerID']
+    timestamp = l['unixReviewTime']
     if countU[rev] < min_degree or countP[asin] < min_degree:
         continue
 

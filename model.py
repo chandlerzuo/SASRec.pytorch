@@ -113,7 +113,7 @@ class SASRec(torch.nn.Module):
 
         final_feat = log_feats[:, -1, :] # only use last QKV classifier, a waste, (U, C)
 
-        item_embs = self.item_emb(torch.LongTensor(item_indices).to(self.dev)) # (U, I, C)
+        item_embs = self.item_emb(torch.LongTensor(item_indices).to(self.dev)) # (I, C)
 
         logits = item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1)
 

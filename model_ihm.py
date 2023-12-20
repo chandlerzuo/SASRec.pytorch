@@ -103,23 +103,24 @@ class SASRecIHM(torch.nn.Module):
             ],
             dim=1
         )
-        item_embs = self.item_emb(torch.LongTensor(i_seq).to(self.dev)) # (B, L, C)
-        ih_embs = self.user_emb(torch.LongTensor(ih_seq).to(self.dev)) # (B, L, max_ih_len, C)
-        # item_embs *= self.item_emb.embedding_dim ** 0.5
-        ih_embs *= self.item_emb.embedding_dim ** 0.5
-        Q = self.ihm_attn_layer_norm(item_embs).view(1, batch_size * uih_len, -1) # (1, B*L, C)
+        item_embs = self.item_emb(i_seq) # (B, L, C)
+        ih_embs = self.user_emb(ih_seq) # (B, L, max_ih_len, C)
+        item_embs *= self.item_emb.embedding_dim ** 0.5
+        # Q = self.ihm_attn_layer_norm(item_embs).view(1, batch_size * uih_len, -1) # (1, B*L, C)
         ih_embs = torch.concat([ih_embs, item_embs.unsqueeze(2)], dim=2) # (B, L, max_ih_len+1, C)
+        ih_embs *= self.item_emb.embedding_dim ** 0.5
         V = ih_embs.permute(2, 0, 1, 3).view(max_ih_len + 1, batch_size * uih_len, -1) # (max_ih_len+1, B*L, C)
-        mha_output, _ = self.ihm_attn_layer(Q, V, V, key_padding_mask=ih_mask) # (1, B*L, C)
-        ihm_embs = Q + torch.nan_to_num(mha_output, nan=0.) # (1, B*L, C)
+        # mha_output, _ = self.ihm_attn_layer(Q, V, V, key_padding_mask=ih_mask) # (1, B*L, C)
+        mha_output, _ = self.ihm_attn_layer(V, V, V, key_padding_mask=ih_mask) # (max_ih_len+1, B*L, C)
+        ihm_embs = torch.nan_to_num(mha_output[-1, :, :]) # (1, B*L, C)
+        # ihm_embs = Q + torch.nan_to_num(mha_output, nan=0.) # (1, B*L, C)
         ihm_embs = torch.reshape(ihm_embs, (batch_size, uih_len, -1)) # (B, L, C)
         ihm_embs = self.ihm_fwd_layernorm(ihm_embs) # (B, L, C)
         ihm_embs = self.ihm_fwd_layer(ihm_embs) # (B, L, C)
 
         ihm_gating_weights = self.ihm_gating(torch.cat([item_embs, ihm_embs], dim = 2)) # (B, L, 1)
         final_embs = ihm_embs * ihm_gating_weights + item_embs * (1-ihm_gating_weights) # (B, L, C)
-        # return final_embs
-        return item_embs
+        return final_embs
 
     def forward(self, user_ids, log_seqs, pos_seqs, neg_seqs, pos_ih_seqs, neg_ih_seqs): # for training
         log_feats = self.log2feats(log_seqs) # user_ids hasn't been used yet

@@ -4,9 +4,10 @@ import torch
 import argparse
 
 from model_ihm import SASRecIHM as SASRec
+# from model import SASRec
 from utils_ihm import *
 
-# python main_ihm.py --dataset=ml-1m --train_dir=default --maxlen=20 --dropout_rate=0.2 --num_epochs 20
+# python main_ihm.py --dataset=ml-1m_full --train_dir=default --maxlen=200 --dropout_rate=0.2 --num_epochs 20
 
 def str2bool(s):
     if s not in {'false', 'true'}:
@@ -39,11 +40,13 @@ f.close()
 
 if __name__ == '__main__':
     # global dataset
-    dataset = data_partition(args.dataset)
+    # dataset = data_partition(args.dataset)
+    dataset = data_partition_by_ts(args.dataset)
 
-    [user_train, user_valid, user_test, usernum, itemnum] = dataset
+    # [user_train, user_valid, user_test, usernum, itemnum] = dataset
+    [user_train, _, usernum, itemnum] = dataset
     num_batch = len(user_train) // args.batch_size # tail? + ((len(user_train) % args.batch_size) != 0)
-    num_batch = 1
+    # num_batch = 1 # to remove
     cc = 0.0
     for u in user_train:
         cc += len(user_train[u])
@@ -79,6 +82,7 @@ if __name__ == '__main__':
 
 
     if args.inference_only:
+        # doesn't work for ts groups
         model.eval()
         t_test = evaluate(model, dataset, args)
         print('test (NDCG@10: %.4f, HR@10: %.4f)' % (t_test[0], t_test[1]))
@@ -97,6 +101,7 @@ if __name__ == '__main__':
             u, seq, pos, neg, pos_ih, neg_ih = sampler.next_batch() # tuples to ndarray
             u, seq, pos, neg, pos_ih, neg_ih = np.array(u), np.array(seq), np.array(pos), np.array(neg), np.array(pos_ih), np.array(neg_ih)
             pos_logits, neg_logits = model(u, seq, pos, neg, pos_ih, neg_ih)
+            # pos_logits, neg_logits = model(u, seq, pos, neg)
             pos_labels, neg_labels = torch.ones(pos_logits.shape, device=args.device), torch.zeros(neg_logits.shape, device=args.device)
             # print("\neye ball check raw_logits:"); print(pos_logits); print(neg_logits) # check pos_logits > 0, neg_logits < 0
             adam_optimizer.zero_grad()
@@ -108,17 +113,34 @@ if __name__ == '__main__':
             adam_optimizer.step()
             print("loss in epoch {} iteration {}: {}".format(epoch, step, loss.item())) # expected 0.4~0.6 after init few epochs
 
-        if epoch % 20 == 0:
+        if epoch % 20 == 0: # to remove
             model.eval()
             t1 = time.time() - t0
             T += t1
-            print('Evaluating', end='')
+            print('Evaluating ', end='')
+            """
             t_test = evaluate(model, dataset, args)
             t_valid = evaluate_valid(model, dataset, args)
             print('epoch:%d, time: %f(s), valid (NDCG@10: %.4f, HR@10: %.4f), test (NDCG@10: %.4f, HR@10: %.4f)'
                     % (epoch, T, t_valid[0], t_valid[1], t_test[0], t_test[1]))
 
             f.write(str(t_valid) + ' ' + str(t_test) + '\n')
+            f.flush()
+            """
+            ts_groups = 5
+            print('epoch:%d, time: %f(s)' % (epoch, T))
+            for i_group in range(ts_groups):
+                ndcg, hrate, valid_users, pool_sizes = evaluate_by_ts_degree(model, dataset, i_group, args)
+                for train_degree in sorted(valid_users.keys()):
+                    print('TS window %d degree %d (NDCG@10: %.4f, HR@10: %.4f)' % (
+                        i_group, train_degree, ndcg[train_degree], hrate[train_degree]
+                    ))
+                    f.write(
+                        f"TS window {i_group} degree {train_degree} "
+                        f"NDCG {ndcg[train_degree]} HRate {hrate[train_degree]} "
+                        f"valid users {valid_users[train_degree]} "
+                        f"neg pool size {pool_sizes[train_degree]}\n"
+                    )
             f.flush()
             t0 = time.time()
             model.train()
