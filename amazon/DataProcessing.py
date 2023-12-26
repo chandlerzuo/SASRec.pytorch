@@ -1,43 +1,52 @@
 import gzip
 import json
 from collections import defaultdict
-from datetime import datetime
 
 max_ih_len = 30
 min_degree = 0
-raw_file = "../raw_data/Video_Games.json.gz"
-processed_file = "amazon_games.txt"
+raw_file = "../raw_data/Books.json.gz"
+processed_file = "amazon_books_sampled.txt"
+max_num_users = 100_000
 
 def parse(path):
-    g = gzip.open(path, 'r')
-    for l in g:
-        yield json.loads(l)
+    g = gzip.open(path, "r")
+    for l0 in g:
+        yield json.loads(l0)
+
 
 countU = defaultdict(lambda: 0)
 countP = defaultdict(lambda: 0)
 line = 0
 
+user_set = set()
 for l in parse(raw_file):
     line += 1
-    asin = l['asin']
-    rev = l['reviewerID']
-    time = l['unixReviewTime']
+    asin = l["asin"]
+    rev = l["reviewerID"]
+    time = l["unixReviewTime"]
+    if line % 100000 == 0:
+        print(f"processed {line} lines")
+    if len(user_set) > max_num_users and rev not in user_set:
+        continue
     countU[rev] += 1
     countP[asin] += 1
+    user_set.add(rev)
 
-usermap = dict()
+print("processed file once")
+
+usermap = {}
 usernum = 0
-itemmap = dict()
+itemmap = {}
 itemnum = 0
-User = dict()
-Item = dict()
-Timestamp = dict()
+User = {}
+Item = {}
+Timestamp = {}
 for l in parse(raw_file):
     line += 1
-    asin = l['asin']
-    rev = l['reviewerID']
-    timestamp = l['unixReviewTime']
-    if countU[rev] < min_degree or countP[asin] < min_degree:
+    asin = l["asin"]
+    rev = l["reviewerID"]
+    timestamp = l["unixReviewTime"]
+    if rev not in user_set or countU[rev] < min_degree or countP[asin] < min_degree:
         continue
 
     if rev in usermap:
@@ -67,7 +76,7 @@ for itemid in Item.keys():
 
 print(f"{usernum}, {itemnum}")
 
-f = open(processed_file, 'w')
+f = open(processed_file, "w")
 nrow = 0
 for user in User.keys():
     for timestamp, itemid in User[user]:
