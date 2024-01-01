@@ -236,8 +236,12 @@ def evaluate(model, dataset, args):
     HT = 0.0
     valid_user = 0.0
 
-    # a list of tuple [([itemid], item_history)]
+    # each element is a list of length 1: [(itemid, item_history)]
     neg_pool = [x for x in test.values() if len(x) > 0]
+    neg_pool_item_to_ih = {}
+    for x in neg_pool:
+        i, ih = x[0]
+        neg_pool_item_to_ih.setdefault(i, []).append(ih)
 
     if usernum > 10000:
         users = random.sample(range(1, usernum + 1), 10000)
@@ -264,14 +268,24 @@ def evaluate(model, dataset, args):
         ih_len = min(args.maxlen_ih, len(pos_ih))
         item_history = [[0] * (args.maxlen_ih - ih_len) + pos_ih[-ih_len:]]
         for _ in range(100):
+            # Option 1: uniform neg sampling
+            t = np.random.randint(1, itemnum + 1)
+            while t in rated:
+                t = np.random.randint(1, itemnum + 1)
+            item_idx.append(t)
+            ih = neg_pool_item_to_ih.get(t, [[]])[
+                np.random.choice(len(neg_pool_item_to_ih.get(t, [[]])))
+            ]
+            """
+            # Option 2: pool based neg sampling
             t = np.random.randint(0, len(neg_pool))
             while neg_pool[t][0][0] in rated:
                 t = np.random.randint(0, len(neg_pool))
             item_idx.append(neg_pool[t][0][0])
-            neg_spl_ih_len = min(args.maxlen_ih, len(neg_pool[t][0][1]))
-            neg_spl_ih = [0] * (args.maxlen_ih - neg_spl_ih_len) + neg_pool[t][0][1][
-                -neg_spl_ih_len:
-            ]
+            ih = neg_pool[t][0][1]
+            """
+            neg_spl_ih_len = min(args.maxlen_ih, len(ih))
+            neg_spl_ih = [0] * (args.maxlen_ih - neg_spl_ih_len) + ih[-neg_spl_ih_len:]
             item_history.append(neg_spl_ih)
 
         predictions = -model.predict(
@@ -297,7 +311,12 @@ def evaluate(model, dataset, args):
 def evaluate_valid(model, dataset, args):
     [train, valid, test, usernum, itemnum] = copy.deepcopy(dataset)
 
+    # each element is a list of length 1: [(itemid, item_history)]
     neg_pool = [x for x in test.values() if len(x) > 0]
+    neg_pool_item_to_ih = {}
+    for x in neg_pool:
+        i, ih = x[0]
+        neg_pool_item_to_ih.setdefault(i, []).append(ih)
 
     NDCG = 0.0
     valid_user = 0.0
@@ -324,20 +343,25 @@ def evaluate_valid(model, dataset, args):
         ih_len = min(args.maxlen_ih, len(pos_ih))
         item_history = [[0] * (args.maxlen_ih - ih_len) + pos_ih[-ih_len:]]
         for _ in range(100):
+            # Option 1: uniform neg sampling
+            t = np.random.randint(1, itemnum + 1)
+            while t in rated:
+                t = np.random.randint(1, itemnum + 1)
+            item_idx.append(t)
+            ih = neg_pool_item_to_ih.get(t, [[]])[
+                np.random.choice(len(neg_pool_item_to_ih.get(t, [[]])))
+            ]
+            """
+            # Option 2: pool based neg sampling
             t = np.random.randint(0, len(neg_pool))
             while neg_pool[t][0][0] in rated:
                 t = np.random.randint(0, len(neg_pool))
             item_idx.append(neg_pool[t][0][0])
-            neg_spl_ih_len = min(args.maxlen_ih, len(neg_pool[t][0][1]))
-            neg_spl_ih = [0] * (args.maxlen_ih - neg_spl_ih_len) + neg_pool[t][0][1][
-                -neg_spl_ih_len:
-            ]
+            ih = neg_pool[t][0][1]
+            """
+            neg_spl_ih_len = min(args.maxlen_ih, len(ih))
+            neg_spl_ih = [0] * (args.maxlen_ih - neg_spl_ih_len) + ih[-neg_spl_ih_len:]
             item_history.append(neg_spl_ih)
-            """
-            t = np.random.randint(1, itemnum + 1)
-            while t in rated: t = np.random.randint(1, itemnum + 1)
-            item_idx.append(t)
-            """
 
         predictions = -model.predict(
             *[np.array(l) for l in [[u], [seq], item_idx, item_history]]
@@ -539,6 +563,138 @@ def evaluate_by_ts_degree(model, dataset, ts_group, args):
                 neg_spl_ih = [0] * (
                     args.maxlen_ih - neg_spl_ih_len
                 ) + neg_pool_by_degree[item_degbucket][t][1][-neg_spl_ih_len:]
+                item_history.append(neg_spl_ih)
+
+            predictions = -model.predict(
+                *[np.array(l) for l in [[u], [seq], item_idx, item_history]]
+            )
+            predictions = predictions[0]  # - for 1st argsort DESC
+
+            rank = predictions.argsort().argsort()[0].item()
+
+            valid_user[item_degbucket] = valid_user.setdefault(item_degbucket, 0) + 1
+
+            for k in top_ks:
+                if rank < k:
+                    NDCG[k][item_degbucket] = NDCG[k].setdefault(
+                        item_degbucket, 0
+                    ) + 1 / np.log2(rank + 2)
+                    HT[k][item_degbucket] = HT[k].setdefault(item_degbucket, 0) + 1
+            if n_iter % 100 == 0:
+                print(".", end="")
+                sys.stdout.flush()
+            n_iter += 1
+
+    for item_degbucket in valid_user.keys():
+        for k in top_ks:
+            NDCG[k][item_degbucket] = (
+                NDCG[k].get(item_degbucket, 0) * 1.0 / valid_user[item_degbucket]
+            )
+            HT[k][item_degbucket] = (
+                HT[k].get(item_degbucket, 0) * 1.0 / valid_user[item_degbucket]
+            )
+
+    return NDCG, HT, valid_user, pool_size
+
+
+def evaluate_by_ts_degree_v2(model, dataset, ts_group, args):
+    [train, test, usernum, itemnum] = copy.deepcopy(dataset)
+
+    def degree_to_degbucket(_item_freq):
+        if _item_freq <= 10:
+            return 0
+        return 1
+
+    # a list of tuple (itemid, item_history)
+    # neg_pool = [x for x in test[ts_group].values() if len(x) > 0]
+    # fix the neg pool for all ts groups
+    neg_pool = [
+        (item_id, ih)
+        for igroup in range(len(test))
+        for x in test[igroup].values()
+        for item_id, ih in x
+    ]
+
+    # frequency of item in training data
+    items_train = [x for l in train.values() for x, _ in l]
+    values, counts = np.unique(items_train, return_counts=True)
+    item_freq = dict(zip(values, counts))
+
+    # break neg pool by degree
+    num_degree_buckets = degree_to_degbucket(100000) + 1
+    neg_pool_by_degree = {}
+    for degbucket in range(num_degree_buckets):
+        for x, ih in neg_pool:
+            # {degbucket: {item_id: [ih0, ih1, ...]}}
+            if degree_to_degbucket(item_freq.get(x, 0)) == degbucket:
+                neg_pool_by_degree.setdefault(degbucket, {})
+                neg_pool_by_degree[degbucket].setdefault(x, []).append(ih)
+
+    users = [u for u, x in test[ts_group].items() if len(x) > 0]
+    if len(users) > 10000:
+        users = random.sample(users, 10000)
+
+    print(f"test users in group {ts_group}: {len(users)}")
+    top_ks = [10, 20, 50, 100]
+    NDCG = {k: {} for k in top_ks}
+    HT = {k: {} for k in top_ks}
+    valid_user = {}
+    pool_size = {
+        degbucket: len(negpool) for degbucket, negpool in neg_pool_by_degree.items()
+    }
+
+    n_iter = 0
+    for u in users:
+        # join the train seq and the validation element together
+        seq = np.zeros([args.maxlen], dtype=np.int32)
+        idx = args.maxlen - 1
+        """
+        for i_group in reversed(range(ts_group-1)):
+            for i, ih in reversed(test[ts_group].get(u, [])):
+                if idx == -1: break
+                seq[idx] = i
+                idx -= 1
+        """
+        for i, ih in reversed(train.get(u, [])):
+            if idx == -1:
+                break
+            seq[idx] = i
+            idx -= 1
+        rated = set([i for i, _ in train.get(u, [])])
+        rated.add(0)
+        degbucket_cnt_for_user = {
+            degbucket: 0 for degbucket in neg_pool_by_degree.keys()
+        }
+        for i_test in range(len(test[ts_group].get(u, []))):
+            item_idx, pos_ih = [test[ts_group][u][i_test][0]], test[ts_group][u][
+                i_test
+            ][1]
+            # identify the degree bucket
+            _item_freq = item_freq.get(item_idx[0], 0)
+            item_degbucket = degree_to_degbucket(_item_freq)
+            # for each user, only consider one item from each item degree bucket in the test set
+            if degbucket_cnt_for_user[item_degbucket] > 0:
+                continue
+            degbucket_cnt_for_user[item_degbucket] += 1
+
+            ih_len = min(args.maxlen_ih, len(pos_ih))
+            item_history = [[0] * (args.maxlen_ih - ih_len) + pos_ih[-ih_len:]]
+            # only sample from the neg pool of this bucket
+            for _ in range(100):
+                # first, uniformly sample one item from the neg pool of this bucket
+                t = np.random.choice(list(neg_pool_by_degree[item_degbucket].keys()))
+                while t in rated:
+                    t = np.random.choice(
+                        list(neg_pool_by_degree[item_degbucket].keys())
+                    )
+                item_idx.append(t)
+                # second, sample an IH of this item
+                ih_idx = np.random.choice(len(neg_pool_by_degree[item_degbucket][t]))
+                neg_ih = neg_pool_by_degree[item_degbucket][t][ih_idx]
+                neg_spl_ih_len = min(args.maxlen_ih, len(neg_ih))
+                neg_spl_ih = [0] * (args.maxlen_ih - neg_spl_ih_len) + neg_ih[
+                    -neg_spl_ih_len:
+                ]
                 item_history.append(neg_spl_ih)
 
             predictions = -model.predict(

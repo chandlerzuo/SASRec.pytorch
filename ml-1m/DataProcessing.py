@@ -1,19 +1,16 @@
-import gzip
 from collections import defaultdict
-from datetime import datetime
 
 raw_file = "ratings.dat"
 processed_file = "ml-1m.txt"
 max_ih_len = 30
-processed_file = "ml-1m_full.txt"
-min_degree = 0
-raw_file = "All_Beauty.json.gz"
-processed_file = "amazon_beauty.txt"
+# processed_file = "ml-1m_full.txt"
+min_degree = 5
+
 
 def parse(path):
-    g = open(path, 'r')
-    for l in g:
-        yield l.strip().split('::')
+    g = open(path, "r")
+    for l0 in g:
+        yield l0.strip().split("::")
 
 
 countU = defaultdict(lambda: 0)
@@ -26,13 +23,13 @@ for l in parse(raw_file):
     countU[rev] += 1
     countP[asin] += 1
 
-usermap = dict()
+usermap = {}
 usernum = 0
-itemmap = dict()
+itemmap = {}
 itemnum = 0
-User = dict()
-Item = dict()
-Timestamp = dict()
+User = {}
+Item = {}
+Timestamp = {}
 for l in parse(raw_file):
     line += 1
     rev, asin, rating, timestamp = l
@@ -66,7 +63,7 @@ for itemid in Item.keys():
 
 print(f"{usernum}, {itemnum}")
 
-f = open(processed_file, 'w')
+f = open(processed_file, "w")
 nrow = 0
 for user in User.keys():
     for timestamp, itemid in User[user]:

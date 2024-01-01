@@ -1,12 +1,28 @@
+import argparse
 import gzip
 import json
 from collections import defaultdict
 
+# python3 DataProcessing.py --input_file=../raw_data/All_Beauty.json.gz --output_file=amazon_beauty.txt
+# python3 DataProcessing.py --input_file=../raw_data/Books.json.gz --output_file=amazon_books.txt --max_num_users=1_000_000
+# python3 DataProcessing.py --input_file=../raw_data/Video_Games.json.gz --output_file=amazon_games.txt
+
+# buck run @//mode/opt :amazon_preproc -- --input_file=../raw_data/Video_Games_5.json.gz --output_file=amazon_games_5.txt --min_degree=0
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input_file", required=True, type=str)
+parser.add_argument("--output_file", required=True, type=str)
+parser.add_argument("--min_degree", required=False, default=5, type=int)
+parser.add_argument("--max_num_users", required=False, default=0, type=int)
+args = parser.parse_args()
+
 max_ih_len = 30
-min_degree = 0
-raw_file = "../raw_data/Books.json.gz"
-processed_file = "amazon_books_sampled.txt"
-max_num_users = 100_000
+
+raw_file = args.input_file
+processed_file = args.output_file
+max_num_users = args.max_num_users
+min_degree = args.min_degree
+
 
 def parse(path):
     g = gzip.open(path, "r")
@@ -26,7 +42,7 @@ for l in parse(raw_file):
     time = l["unixReviewTime"]
     if line % 100000 == 0:
         print(f"processed {line} lines")
-    if len(user_set) > max_num_users and rev not in user_set:
+    if max_num_users > 0 and len(user_set) > max_num_users and rev not in user_set:
         continue
     countU[rev] += 1
     countP[asin] += 1
@@ -90,6 +106,6 @@ for user in User.keys():
         ih_str = ",".join([str(x) for x in item_history])
         f.write(f"{user} {itemid} {timestamp} {ih_str}\n")
     nrow += 1
-    if nrow % 200 == 0:
+    if nrow % 2000 == 0:
         print(f"processed {nrow} users")
 f.close()

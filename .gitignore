@@ -5,3 +5,8 @@ experiments/
 *.txt
 *.dat
 *.json.gz
+*.out
+*.csv
+*/*.txt
+TARGETS
+*.par
